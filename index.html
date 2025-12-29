@@ -1,9 +1,229 @@
-<h1>EC2 Details</h1>
-<p>Served by Load balancer new</p>
-<pre>
-ID: {{INSTANCE_ID}}
-Type: {{INSTANCE_TYPE}}
-AZ: {{AVAILABILITY_ZONE}}
-Private IP: {{LOCAL_IPV4}}
-Public IP: {{PUBLIC_IPV4}}
-</pre>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rotating Octahedron with Physics</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 14px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        Rotating Octahedron with Physics Simulation<br>
+        Balls bounce inside the octahedron
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, octahedron, balls = [];
+        let octaVertices = [];
+        let octaFaces = [];
+        const ballRadius = 0.15;
+        const gravity = 0.003;
+        const damping = 0.98;
+        const restitution = 0.8;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 4;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Create octahedron wireframe
+            const octaGeometry = new THREE.OctahedronGeometry(1.5);
+            const octaMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0x00ffff, 
+                wireframe: true,
+                transparent: true,
+                opacity: 0.6
+            });
+            octahedron = new THREE.Mesh(octaGeometry, octaMaterial);
+            scene.add(octahedron);
+
+            // Store octahedron vertices and faces for collision detection
+            const positions = octaGeometry.attributes.position;
+            for (let i = 0; i < positions.count; i++) {
+                octaVertices.push(new THREE.Vector3(
+                    positions.getX(i),
+                    positions.getY(i),
+                    positions.getZ(i)
+                ));
+            }
+
+            // Get faces from geometry
+            for (let i = 0; i < positions.count; i += 3) {
+                octaFaces.push({
+                    a: octaVertices[i],
+                    b: octaVertices[i + 1],
+                    c: octaVertices[i + 2]
+                });
+            }
+
+            // Create three balls
+            const colors = [0xff6b6b, 0x4ecdc4, 0xffe66d];
+            for (let i = 0; i < 3; i++) {
+                const ballGeometry = new THREE.SphereGeometry(ballRadius, 32, 32);
+                const ballMaterial = new THREE.MeshStandardMaterial({ 
+                    color: colors[i],
+                    metalness: 0.5,
+                    roughness: 0.2
+                });
+                const ball = new THREE.Mesh(ballGeometry, ballMaterial);
+                
+                // Start at center with small random velocity
+                ball.position.set(0, 0, 0);
+                ball.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.02,
+                    (Math.random() - 0.5) * 0.02,
+                    (Math.random() - 0.5) * 0.02
+                );
+                
+                balls.push(ball);
+                scene.add(ball);
+            }
+
+            // Add lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(5, 5, 5);
+            scene.add(pointLight);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function getPlaneNormal(face) {
+            const v1 = new THREE.Vector3().subVectors(face.b, face.a);
+            const v2 = new THREE.Vector3().subVectors(face.c, face.a);
+            return new THREE.Vector3().crossVectors(v1, v2).normalize();
+        }
+
+        function distanceToPlane(point, face) {
+            const normal = getPlaneNormal(face);
+            const d = -normal.dot(face.a);
+            return normal.dot(point) + d;
+        }
+
+        function checkOctahedronCollision(ball) {
+            const worldPos = new THREE.Vector3();
+            ball.getWorldPosition(worldPos);
+
+            // Transform to octahedron's local space
+            const localPos = worldPos.clone().applyMatrix4(octahedron.matrixWorld.clone().invert());
+
+            for (let face of octaFaces) {
+                const dist = distanceToPlane(localPos, face);
+                
+                if (Math.abs(dist) < ballRadius) {
+                    const normal = getPlaneNormal(face);
+                    
+                    // Transform normal to world space
+                    const worldNormal = normal.clone().applyMatrix4(
+                        new THREE.Matrix4().extractRotation(octahedron.matrixWorld)
+                    ).normalize();
+
+                    // Reflect velocity
+                    const dot = ball.velocity.dot(worldNormal);
+                    if (dot < 0) {
+                        ball.velocity.reflect(worldNormal).multiplyScalar(restitution);
+                        
+                        // Push ball away from surface
+                        const correction = worldNormal.clone().multiplyScalar(ballRadius - Math.abs(dist));
+                        ball.position.add(correction);
+                    }
+                }
+            }
+        }
+
+        function checkBallCollisions() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const diff = new THREE.Vector3().subVectors(balls[i].position, balls[j].position);
+                    const dist = diff.length();
+                    const minDist = ballRadius * 2;
+
+                    if (dist < minDist) {
+                        // Normalize difference vector
+                        diff.normalize();
+                        
+                        // Separate balls
+                        const overlap = (minDist - dist) / 2;
+                        balls[i].position.addScaledVector(diff, overlap);
+                        balls[j].position.addScaledVector(diff, -overlap);
+
+                        // Calculate relative velocity
+                        const relVel = new THREE.Vector3().subVectors(balls[i].velocity, balls[j].velocity);
+                        const speed = relVel.dot(diff);
+
+                        if (speed < 0) {
+                            // Apply collision impulse
+                            const impulse = diff.clone().multiplyScalar(speed * restitution);
+                            balls[i].velocity.sub(impulse);
+                            balls[j].velocity.add(impulse);
+                        }
+                    }
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Rotate octahedron
+            octahedron.rotation.x += 0.005;
+            octahedron.rotation.y += 0.007;
+
+            // Update ball physics
+            balls.forEach(ball => {
+                // Apply gravity
+                ball.velocity.y -= gravity;
+                
+                // Apply damping
+                ball.velocity.multiplyScalar(damping);
+                
+                // Update position
+                ball.position.add(ball.velocity);
+
+                // Check collision with octahedron
+                checkOctahedronCollision(ball);
+            });
+
+            // Check ball-to-ball collisions
+            checkBallCollisions();
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+        animate();
+    </script>
+</body>
+</html>
